@@ -304,7 +304,9 @@ class FortranReader(object):
             if match:
                 # print("DDD " + match.group(2) + " " + match.group(3) + " " + match.group(4))
                 tmp = match.group(1)
-                if len(tmp.strip()) > 0 and not re.search("^!|^PROCEDURE|^GENERIC", tmp.strip()):
+                if len(tmp.strip()) > 0 and not re.search(
+                    "^!|^PROCEDURE|^GENERIC", tmp.strip()
+                ):
                     self.continued_decl = True
                     self.decl_type = tmp
                     # print("AAA " + self.decl_type.strip())
@@ -348,7 +350,11 @@ class FortranReader(object):
                     if self.continued_decl:
                         # continued = False
                         if re.search(", *&", line):
-                            line = self.decl_type + " :: " + re.sub(", *&","",line.strip()[1:])
+                            line = (
+                                self.decl_type
+                                + " :: "
+                                + re.sub(", *&", "", line.strip()[1:])
+                            )
                         else:
                             line = self.decl_type + " :: " + line.strip()[1:]
                             self.decl_type = ""

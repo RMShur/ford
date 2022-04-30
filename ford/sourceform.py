@@ -2040,6 +2040,7 @@ class FortranEnum(FortranContainer):
 
     def _initialize(self, line):
         self.variables = []
+        self.name = ""
 
     def _cleanup(self):
         prev_val = -1

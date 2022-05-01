@@ -347,7 +347,7 @@ class FortranReader(object):
                 # print("BBB " + line.strip())
                 # if len(line.strip()) > 0 and line.strip()[0] == "&":
                 if len(line.strip()) > 0:
-                    if line.strip()[0] == '&':
+                    if line.strip()[0] == "&":
                         line = line[1:]
                     if self.continued_decl:
                         # continued = False

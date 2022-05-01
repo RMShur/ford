@@ -94,9 +94,9 @@ class FortranReader(object):
     # Regexes
     COM_RE = re.compile("^([^\"'!]|('[^']*')|(\"[^\"]*\"))*(!.*)$")
     SC_RE = re.compile("^([^;]*);(.*)$")
-    DECL_RE = re.compile("^(.*)\:\:.*(.*&)(.*$)")
-
-    # DECL_RE = re.compile("^(.*)(\:\:)(.*)([^,].*| *)( *&)(.*$)")
+    # DECL_RE = re.compile("^(.*)\:\:.*(.*&)(.*$)")
+    # DECL_RE = re.compile("^(.*)\:\: *(([a-zA-Z].*),)?(.*&)(.*$)")
+    DECL_RE = re.compile("^(.*)\:\: *([a-zA-Z].*)?( *&)(.*$)")
 
     def __init__(
         self,
@@ -301,21 +301,24 @@ class FortranReader(object):
 
             # print(line)
             match = self.DECL_RE.match(line)
-            if match:
-                # print("DDD " + match.group(2) + " " + match.group(3) + " " + match.group(4))
+            if match and not line.strip().startswith('!'):
+                # print('DDD ',match.groups())
                 tmp = match.group(1)
                 if len(tmp.strip()) > 0 and not re.search(
                     "^!|^PROCEDURE|^GENERIC", tmp.strip()
                 ):
                     self.continued_decl = True
-                    self.decl_type = tmp
+                    self.decl_type = tmp.strip()
                     # print("AAA " + self.decl_type.strip())
                     continued = False
                     done = True
-                    self.docbuffer.append("!" + self.docmark)
-                    continue
-            # else:
-            #     decl_type = ""
+                    if match.group(2):
+                      line = re.sub(self.decl_type.replace('(','\(').replace(')','\)') + ' *::','',line.strip())
+                    else:
+                      self.docbuffer.append("!" + self.docmark)
+                      continue
+                    # line = re.sub(', *&','',line.strip())
+                    # continue
 
             # Capture any documentation comments
             match = _match_docmark(self.doc_re, line, in_quote)
@@ -345,10 +348,17 @@ class FortranReader(object):
 
             if self.decl_type != "":
                 # print("BBB " + line.strip())
+                if re.search('^&( *!)?', line.strip()):
+                    line = re.sub('^&','',line.strip())
+                    # continue
+                # print(line)
                 # if len(line.strip()) > 0 and line.strip()[0] == "&":
                 if len(line.strip()) > 0:
                     if line.strip()[0] == "&":
                         line = line[1:]
+                        # if len(line.strip()) > 0 and line.strip()[0] == '!':
+                        #   line = line[1:]
+                        #   continue
                     if self.continued_decl:
                         # continued = False
                         if re.search(", *&", line):

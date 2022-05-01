@@ -301,7 +301,7 @@ class FortranReader(object):
 
             # print(line)
             match = self.DECL_RE.match(line)
-            if match and not line.strip().startswith('!'):
+            if match and not line.strip().startswith("!"):
                 # print('DDD ',match.groups())
                 tmp = match.group(1)
                 if len(tmp.strip()) > 0 and not re.search(
@@ -313,10 +313,15 @@ class FortranReader(object):
                     continued = False
                     done = True
                     if match.group(2):
-                      line = re.sub(self.decl_type.replace('(','\(').replace(')','\)') + ' *::','',line.strip())
+                        line = re.sub(
+                            self.decl_type.replace("(", "\(").replace(")", "\)")
+                            + " *::",
+                            "",
+                            line.strip(),
+                        )
                     else:
-                      self.docbuffer.append("!" + self.docmark)
-                      continue
+                        self.docbuffer.append("!" + self.docmark)
+                        continue
                     # line = re.sub(', *&','',line.strip())
                     # continue
 
@@ -348,8 +353,8 @@ class FortranReader(object):
 
             if self.decl_type != "":
                 # print("BBB " + line.strip())
-                if re.search('^&( *!)?', line.strip()):
-                    line = re.sub('^&','',line.strip())
+                if re.search("^&( *!)?", line.strip()):
+                    line = re.sub("^&", "", line.strip())
                     # continue
                 # print(line)
                 # if len(line.strip()) > 0 and line.strip()[0] == "&":

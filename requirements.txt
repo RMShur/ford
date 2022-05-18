@@ -1,5 +1,8 @@
 toposort
 markdown
+markdown-include
+md-environ
+python-markdown-math
 tqdm
 bs4
 graphviz

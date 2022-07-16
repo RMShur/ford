@@ -1,5 +1,5 @@
 toposort
-markdown
+markdown == 3.3.7
 markdown-include
 md-environ
 python-markdown-math

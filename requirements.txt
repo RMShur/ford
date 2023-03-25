@@ -1,8 +1,12 @@
 toposort
-markdown
+markdown == 3.3.7
+markdown-include
+md-environ
+python-markdown-math
 tqdm
 bs4
 graphviz
 pygments
 jinja2
 importlib-metadata
+setuptools_scm

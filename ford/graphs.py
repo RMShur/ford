@@ -1366,6 +1366,7 @@ class GraphManager:
                 outputFuncWrap,
                 args,
                 max_workers=njobs,
+                chunksize=len(args) // njobs,
                 desc="Writing graphs",
             )
 

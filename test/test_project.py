@@ -1,12 +1,13 @@
-from ford.sourceform import FortranSourceFile
 from ford.fortran_project import Project
 from ford import DEFAULT_SETTINGS
 from ford.utils import normalise_path
 
 from copy import deepcopy
+from itertools import chain
 
 import markdown
 import pytest
+from bs4 import BeautifulSoup
 
 
 @pytest.fixture
@@ -833,3 +834,183 @@ def test_sort(copy_fortran_file, sort_kind, expected_order):
     ]:
         entity_names = [entity.name for entity in getattr(module, entity_type)]
         assert entity_names == expected_order[entity_type], (sort_kind, entity_type)
+
+
+def test_uses(copy_fortran_file):
+    """Check that module `USE`s are matched up correctly"""
+
+    data = """\
+    module mod_a
+    end module mod_a
+
+    module mod_b
+      use mod_a
+    end module mod_b
+
+    module mod_c
+      use mod_a
+      use mod_b
+    end module mod_c
+
+    module mod_d
+      use unquoted_external_module
+      use quoted_external_module
+    end module mod_d
+    """
+
+    extra_mods = {
+        "unquoted_external_module": "http://unquoted.example.com",
+        "quoted_external_module": '"http://quoted.example.org"',
+    }
+
+    settings = copy_fortran_file(data)
+    settings["extra_mods"] = [f"{key}: {value}" for key, value in extra_mods.items()]
+
+    project = create_project(settings)
+    mod_a = project.modules[0]
+    mod_b = project.modules[1]
+    mod_c = project.modules[2]
+    mod_d = project.modules[3]
+
+    assert mod_a.uses == set()
+    assert mod_b.uses == {mod_a}
+    assert mod_c.uses == {mod_a, mod_b}
+
+    mod_d_links = list(mod_d.uses)
+    for link in mod_d_links:
+        soup = BeautifulSoup(link.get_url(), features="html.parser")
+        link = soup.a
+        expected_link = extra_mods[soup.text].strip(r"\"'")
+        assert link["href"] == expected_link, link
+
+
+def test_submodule_uses(copy_fortran_file):
+    """Check that module `USE`s are matched up correctly"""
+
+    data = """\
+    module mod_a
+    end module mod_a
+
+    submodule (mod_a) mod_b
+    end submodule mod_b
+
+    submodule (mod_a) mod_c
+    end submodule mod_c
+
+    submodule (mod_a:mod_c) mod_d
+    end submodule mod_d
+    """
+
+    extra_mods = {
+        "unquoted_external_module": "http://unquoted.example.com",
+        "quoted_external_module": '"http://quoted.example.org"',
+    }
+
+    settings = copy_fortran_file(data)
+    settings["extra_mods"] = [f"{key}: {value}" for key, value in extra_mods.items()]
+
+    project = create_project(settings)
+    mod_a = project.modules[0]
+    mod_b = project.submodules[0]
+    mod_c = project.submodules[1]
+    mod_d = project.submodules[2]
+
+    assert mod_a.uses == set()
+
+    assert mod_b.parent_submodule is None
+    assert mod_b.ancestor_module == mod_a
+
+    assert mod_c.parent_submodule is None
+    assert mod_c.ancestor_module == mod_a
+
+    assert mod_d.parent_submodule == mod_c
+    assert mod_d.ancestor_module == mod_a
+
+
+def test_make_links(copy_fortran_file):
+    links = "[[a]] [[b]] [[b:c]] [[d]] [[b:e]] [[f]] [[a:g]] [[h]]"
+
+    data = f"""\
+    module a !! {links}
+      type b !! {links}
+        integer :: c !! {links}
+      contains
+        final :: d !! {links}
+        procedure :: e !! {links}
+      end type b
+
+      interface b !! {links}
+        module procedure f
+      end interface b
+
+      type(b) :: g !! {links}
+    contains
+      subroutine d(self) !! {links}
+        type(b) :: self !! {links}
+      end subroutine d
+      subroutine e(self) !! {links}
+        class(b) :: self !! {links}
+      end subroutine e
+      function f() !! {links}
+        type(b) :: f !! {links}
+      end function f
+    end module a
+
+    program h !! {links}
+    end program h
+    """
+    settings = copy_fortran_file(data)
+    project = create_project(settings)
+
+    project.make_links()
+
+    expected_links = {
+        "a": "../module/a.html",
+        "b": "../type/b.html",
+        "c": "../type/b.html#variable-c",
+        "d": "../proc/d.html",
+        "e": "../type/b.html#boundprocedure-e",
+        "f": "../proc/f.html",
+        "g": "../module/a.html#variable-g",
+        "h": "../program/h.html",
+    }
+
+    for item in chain(
+        project.files[0].children,
+        project.types[0].children,
+        project.procedures[0].children,
+        project.procedures[2].children,
+    ):
+        docstring = BeautifulSoup(item.doc, features="html.parser")
+        link_locations = {a.string: a.get("href", None) for a in docstring("a")}
+
+        assert link_locations == expected_links, (item, item.name)
+
+
+def test_submodule_procedure_issue_446(copy_fortran_file):
+    data = """\
+    module foo_mod
+      interface
+        module subroutine quaxx
+        end subroutine quaxx
+      end interface
+    end module foo_mod
+
+    submodule (foo_mod) bar_submod
+    contains
+      module procedure quaxx
+        print*, "implementation"
+      end procedure
+    end submodule bar_submod
+    """
+
+    settings = copy_fortran_file(data)
+    settings["display"] = ["public", "private", "protected"]
+    project = create_project(settings)
+    module = project.modules[0]
+
+    interface = module.interfaces[0]
+    assert interface.name == "quaxx"
+    submodproc = module.descendants[0].modprocedures[0]
+
+    assert interface.procedure.module == submodproc

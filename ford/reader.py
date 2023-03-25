@@ -79,16 +79,17 @@ class FortranReader(object):
     """
     An iterator which will convert a free-form Fortran source file into
     a format more conducive for analyzing. It does the following:
-        - combine line continuations into one
-        - remove any normal comments and any comments following an ampersand
-          (line continuation)
-        - if there are documentation comments preceding a piece of code, buffer
-          them and return them after the code, but before any documentation
-          following it
-        - keep any documentation comments and, if they are at the end of a line
-          of actual code, place them on a new line
-        - removes blank lines and trailing white-space
-        - split lines along semicolons
+
+    - combine line continuations into one
+    - remove any normal comments and any comments following an ampersand
+      (line continuation)
+    - if there are documentation comments preceding a piece of code, buffer
+      them and return them after the code, but before any documentation
+      following it
+    - keep any documentation comments and, if they are at the end of a line
+      of actual code, place them on a new line
+    - removes blank lines and trailing white-space
+    - split lines along semicolons
     """
 
     # Regexes
@@ -137,22 +138,23 @@ class FortranReader(object):
             macros = ["-D" + mac.strip() for mac in filter(None, macros)]
             incdirs = [f"-I{d}" for d in inc_dirs]
             preprocessor = preprocessor + macros + incdirs + [filename]
+            command = " ".join(preprocessor)
             print(f"Preprocessing {filename}")
-            fpp = subprocess.Popen(
-                preprocessor,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                universal_newlines=True,
-                encoding=encoding,
-            )
-            (out, err) = fpp.communicate()
-
-            if len(err) > 0:
-                print("Warning: error preprocessing " + filename)
-                print(err)
+            try:
+                out = subprocess.run(
+                    preprocessor, encoding=encoding, check=True, capture_output=True
+                )
+                if out.stderr:
+                    print(
+                        f"Warning when preprocessing {filename}:\n{command}\n{out.stderr}"
+                    )
+                self.reader = StringIO(out.stdout)
+            except subprocess.CalledProcessError as err:
+                print(
+                    f"Warning: error when preprocessing {filename}:\n{command}\n{err.stderr}"
+                )
+                print("Reverting to unpreprocessed file")
                 self.reader = open(filename, "r", encoding=encoding)
-            else:
-                self.reader = StringIO(out)
         else:
             self.reader = open(filename, "r", encoding=encoding)
 
@@ -234,7 +236,6 @@ class FortranReader(object):
         linebuffer = ""
 
         while not done:
-
             line = next(self.reader)
 
             self.line_number += 1
@@ -244,7 +245,7 @@ class FortranReader(object):
             if len(line.strip()) > 0 and line.strip()[0] == "#":
                 continue
 
-            # Capture any preceding documenation comments
+            # Capture any preceding documentation comments
             match = _match_docmark(self.predoc_re, line, in_quote)
             if match:
                 # Switch to predoc: following comment lines are predoc until the end of the block

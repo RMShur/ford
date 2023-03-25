@@ -43,10 +43,8 @@ import ford.utils
 import ford.pagetree
 from ford.md_environ import EnvironExtension
 
-try:
-    from importlib.metadata import version, PackageNotFoundError
-except ModuleNotFoundError:
-    from importlib_metadata import version, PackageNotFoundError
+from importlib.metadata import version, PackageNotFoundError
+
 try:
     __version__ = version(__name__)
 except PackageNotFoundError:
@@ -241,55 +239,58 @@ def get_command_line_arguments() -> argparse.Namespace:
 
     parser = argparse.ArgumentParser(
         "ford",
-        description="Document a program or library written in modern Fortran. Any command-line options over-ride those specified in the project file.",
+        description="Document a program or library written in modern Fortran. "
+        "Any command-line options over-ride those specified in the project file.",
     )
     parser.add_argument(
         "project_file",
         help="file containing the description and settings for the project",
-        type=argparse.FileType("r"),
+        type=argparse.FileType("r", encoding="UTF-8"),
     )
     parser.add_argument(
         "-d",
         "--src_dir",
         action="append",
-        help="directories containing all source files for the project",
+        help="directories containing all source files for the project (default: ``./src``)",
     )
     parser.add_argument(
         "-p",
         "--page_dir",
-        help="directory containing the optional page tree describing the project",
+        help="directory containing static pages (default: None)",
     )
     parser.add_argument(
-        "-o", "--output_dir", help="directory in which to place output files"
+        "-o",
+        "--output_dir",
+        help="directory in which to place output files (default: ``./doc``)",
     )
     parser.add_argument("-s", "--css", help="custom style-sheet for the output")
     parser.add_argument(
         "-r",
         "--revision",
         dest="revision",
-        help="Source code revision the project to document",
+        help="source code version number or revision of the project to document",
     )
     parser.add_argument(
         "--exclude",
         action="append",
-        help="any files which should not be included in the documentation",
+        help="list of files which should not be included in the documentation",
     )
     parser.add_argument(
         "--exclude_dir",
         action="append",
-        help="any directories whose contents should not be included in the documentation",
+        help="list of directories whose contents should not be included in the documentation",
     )
     parser.add_argument(
         "-e",
         "--extensions",
         action="append",
-        help="extensions which should be scanned for documentation (default: f90, f95, f03, f08)",
+        help="extensions which should be scanned for documentation (default: ``f90, f95, f03, f08``)",
     )
     parser.add_argument(
         "-m",
         "--macro",
         action="append",
-        help="preprocessor macro (and, optionally, its value) to be applied to files in need of preprocessing.",
+        help="preprocessor macros (optionally with values) to be applied to preprocessed files",
     )
     parser.add_argument(
         "-w",
@@ -305,7 +306,15 @@ def get_command_line_arguments() -> argparse.Namespace:
         dest="force",
         action="store_true",
         default=None,
-        help="continue to read file if fatal errors",
+        help="try to continue to read files even if there are fatal errors",
+    )
+    parser.add_argument(
+        "-g",
+        "--graph",
+        dest="graph",
+        action="store_true",
+        default=None,
+        help="generate graphs for documentation output",
     )
     parser.add_argument(
         "--no-search",
@@ -320,13 +329,13 @@ def get_command_line_arguments() -> argparse.Namespace:
         dest="quiet",
         action="store_true",
         default=None,
-        help="do not print any description of progress",
+        help="suppress normal output",
     )
     parser.add_argument(
         "-V",
         "--version",
         action="version",
-        version="%(prog)s version {}".format(__version__),
+        version=f"%(prog)s version {__version__}",
     )
     parser.add_argument(
         "--debug",
@@ -339,20 +348,21 @@ def get_command_line_arguments() -> argparse.Namespace:
         "-I",
         "--include",
         action="append",
-        help="any directories which should be searched for include files",
+        help="list of directories to be searched for ``include`` files",
     )
     parser.add_argument(
         "--externalize",
         action="store_const",
         const="true",
-        help="Provide information about Fortran objects in a json database for other FORD projects to refer to.",
+        help="provide information about Fortran objects in a json database for "
+        "other FORD projects to refer to.",
     )
     parser.add_argument(
         "-L",
         "--external_links",
         dest="external",
         action="append",
-        help="""External projects to link to.
+        help="""external projects to link to.
         If an entity is not found in the sources, FORD will try to look it up in
         those external projects. If those have documentation generated by FORD with
         the externalize option, a link will be placed into the documentation wherever
@@ -391,7 +401,7 @@ def parse_arguments(
         EnvironExtension(),
     ]
     md = markdown.Markdown(
-        extensions=md_ext, output_format="html5", extension_configs={}
+        extensions=md_ext, output_format="html", extension_configs={}
     )
 
     md.convert(proj_docs)
@@ -405,7 +415,7 @@ def parse_arguments(
         md_ext.extend(md.Meta["md_extensions"])
     md = markdown.Markdown(
         extensions=md_ext,
-        output_format="html5",
+        output_format="html",
         extension_configs={"markdown_include.include": {"base_path": md_base}},
     )
 
@@ -625,7 +635,6 @@ def main(proj_data, proj_docs, md):
         # for external modules
         ford.utils.external(project, make=True, path=proj_data["output_dir"])
 
-    print("")
     return 0
 
 

@@ -2,6 +2,7 @@ from ford.sourceform import (
     FortranSourceFile,
     FortranModule,
     parse_type,
+    ParsedType,
     line_to_variables,
 )
 from ford import DEFAULT_SETTINGS
@@ -637,88 +638,118 @@ def test_module_procedure_case(parse_fortran_file):
     assert module.interfaces[3].procedure.module
 
 
-@dataclass
-class ParsedType:
-    vartype: str
-    kind: Optional[str]
-    strlen: Optional[str]
-    proto: Union[None, str, List[str]]
-    rest: str
+def test_submodule_ancestors(parse_fortran_file):
+    """Check that submodule ancestors and parents are correctly identified"""
+
+    data = """\
+    module mod_a
+    end module mod_a
+
+    submodule (mod_a) mod_b
+    end submodule mod_b
+
+    submodule (mod_a) mod_c
+    end submodule mod_c
+
+    submodule (mod_a:mod_c) mod_d
+    end submodule mod_d
+    """
+
+    fortran_file = parse_fortran_file(data)
+
+    mod_b = fortran_file.submodules[0]
+    mod_c = fortran_file.submodules[1]
+    mod_d = fortran_file.submodules[2]
+
+    assert mod_b.parent_submodule is None
+    assert mod_b.ancestor_module == "mod_a"
+
+    assert mod_c.parent_submodule is None
+    assert mod_c.ancestor_module == "mod_a"
+
+    assert mod_d.parent_submodule == "mod_c"
+    assert mod_d.ancestor_module == "mod_a"
 
 
 @pytest.mark.parametrize(
     ["variable_decl", "expected"],
     [
-        ("integer i", ParsedType("integer", None, None, None, "i")),
-        ("integer :: i", ParsedType("integer", None, None, None, ":: i")),
-        ("integer ( int32 ) :: i", ParsedType("integer", "int32", None, None, ":: i")),
-        ("real r", ParsedType("real", None, None, None, "r")),
-        ("real(real64) r", ParsedType("real", "real64", None, None, "r")),
-        (
-            "REAL( KIND  =  8) :: r, x, y",
-            ParsedType("real", "8", None, None, ":: r, x, y"),
-        ),
-        (
-            "REAL( 8 ) :: r, x, y",
-            ParsedType("real", "8", None, None, ":: r, x, y"),
-        ),
-        (
-            "complex*16 znum",
-            ParsedType("complex", "16", None, None, "znum"),
-        ),
+        ("integer i", ParsedType("integer", "i")),
+        ("integer :: i", ParsedType("integer", ":: i")),
+        ("integer ( int32 ) :: i", ParsedType("integer", ":: i", "int32")),
+        ("real r", ParsedType("real", "r")),
+        ("real(real64) r", ParsedType("real", "r", "real64")),
+        ("REAL( KIND  =  8) :: r, x, y", ParsedType("real", ":: r, x, y", "8")),
+        ("REAL( 8 ) :: r, x, y", ParsedType("real", ":: r, x, y", "8")),
+        ("complex*16 znum", ParsedType("complex", "znum", "16")),
         (
             "character(len=*) :: string",
-            ParsedType("character", None, "*", None, ":: string"),
+            ParsedType("character", ":: string", strlen="*"),
         ),
         (
             "character(len=:) :: string",
-            ParsedType("character", None, ":", None, ":: string"),
+            ParsedType("character", ":: string", strlen=":"),
         ),
+        ("character(12) :: string", ParsedType("character", ":: string", strlen="12")),
         (
-            "character(12) :: string",
-            ParsedType("character", None, "12", None, ":: string"),
+            "character(var) :: string",
+            ParsedType("character", ":: string", strlen="var"),
         ),
+        ("character :: string", ParsedType("character", ":: string", strlen="1")),
         (
             "character(LEN=12) :: string",
-            ParsedType("character", None, "12", None, ":: string"),
+            ParsedType("character", ":: string", strlen="12"),
+        ),
+        (
+            "CHARACTER(KIND= kind('0') ,  len =12) :: string",
+            ParsedType("character", ":: string", kind='kind("a")', strlen="12"),
         ),
         (
             "CHARACTER(KIND=kanji,  len =12) :: string",
-            ParsedType("character", "kanji", "12", None, ":: string"),
+            ParsedType("character", ":: string", kind="kanji", strlen="12"),
         ),
         (
             "CHARACTER(  len =   12,KIND=kanji) :: string",
-            ParsedType("character", "kanji", "12", None, ":: string"),
+            ParsedType("character", ":: string", kind="kanji", strlen="12"),
+        ),
+        (
+            "CHARACTER( 12,kanji ) :: string",
+            ParsedType("character", ":: string", kind="kanji", strlen="12"),
         ),
         (
             "CHARACTER(  kind=    kanji) :: string",
-            ParsedType("character", "kanji", None, None, ":: string"),
+            ParsedType("character", ":: string", kind="kanji", strlen="1"),
         ),
-        ("double PRECISION dp", ParsedType("double precision", None, None, None, "dp")),
-        ("DOUBLE   complex dc", ParsedType("double complex", None, None, None, "dc")),
+        ("double PRECISION dp", ParsedType("double precision", "dp")),
+        ("DOUBLE   complex dc", ParsedType("double complex", "dc")),
         (
             "type(something) :: thing",
-            ParsedType("type", None, None, ["something", ""], ":: thing"),
+            ParsedType("type", ":: thing", proto=["something", ""]),
+        ),
+        (
+            "type(character(kind=kanji, len=10)) :: thing",
+            ParsedType("type", ":: thing", proto=["character", "kind=kanji,len=10"]),
         ),
         (
             "class(foo) :: thing",
-            ParsedType("class", None, None, ["foo", ""], ":: thing"),
+            ParsedType("class", ":: thing", proto=["foo", ""]),
         ),
         (
             "procedure(bar) :: thing",
-            ParsedType("procedure", None, None, ["bar", ""], ":: thing"),
+            ParsedType("procedure", ":: thing", proto=["bar", ""]),
         ),
     ],
 )
 def test_parse_type(variable_decl, expected):
-    vartype, kind, strlen, proto, rest = parse_type(
-        variable_decl, [], {"extra_vartypes": []}
-    )
-    assert vartype == expected.vartype
-    assert kind == expected.kind
-    assert strlen == expected.strlen
-    assert proto == expected.proto
-    assert rest == expected.rest
+    # Tokeniser will have previously replaced strings with index into
+    # this list
+    capture_strings = ['"a"']
+    result = parse_type(variable_decl, capture_strings, {"extra_vartypes": []})
+    assert result.vartype == expected.vartype
+    assert result.kind == expected.kind
+    assert result.strlen == expected.strlen
+    assert result.proto == expected.proto
+    assert result.rest == expected.rest
 
 
 class FakeSource:
@@ -740,12 +771,17 @@ class FakeParent:
     parent = None
 
 
+def _make_list_str() -> List[str]:
+    """This is just to stop mypy complaining for ``attribs`` below"""
+    return []
+
+
 @dataclass
 class FakeVariable:
     name: str
     vartype: str
-    parent: Optional[FakeParent] = FakeParent()
-    attribs: Optional[List[str]] = field(default_factory=list)
+    parent: Optional[FakeParent] = field(default_factory=FakeParent)
+    attribs: Optional[List[str]] = field(default_factory=_make_list_str)
     intent: str = ""
     optional: bool = False
     permission: str = "public"
@@ -1022,3 +1058,472 @@ def test_markdown_source_settings(parse_fortran_file):
 
     assert subroutine.meta["source"]
     assert "with_source" in subroutine.src
+
+
+@pytest.mark.parametrize(
+    ["snippet", "expected_error", "expected_name"],
+    (
+        (
+            "program foo\n contains\n contains",
+            "Multiple CONTAINS",
+            "foo",
+        ),
+        (
+            "program foo\n interface bar\n contains",
+            "Unexpected CONTAINS",
+            "bar",
+        ),
+        ("end", "END statement", "test.f90"),
+        ("program foo\n module procedure bar", "Unexpected MODULE PROCEDURE", "foo"),
+        ("program foo\n module bar", "Unexpected MODULE", "foo"),
+        (
+            "program foo\n submodule (foo) bar \n end program foo",
+            "Unexpected SUBMODULE",
+            "program 'foo'",
+        ),
+        ("program foo\n program bar", "Unexpected PROGRAM", "foo"),
+        (
+            "program foo\n end program foo\n program bar \n end program bar",
+            "Multiple PROGRAM",
+            "test.f90",
+        ),
+        (
+            "program foo\n subroutine bar \n end subroutine \n end program",
+            "Unexpected SUBROUTINE",
+            "program 'foo'",
+        ),
+        (
+            "program foo\n integer function bar() \n end function bar\n end program foo",
+            "Unexpected FUNCTION",
+            "program 'foo'",
+        ),
+    ),
+)
+def test_bad_parses(snippet, expected_error, expected_name, parse_fortran_file):
+    with pytest.raises(ValueError) as e:
+        parse_fortran_file(snippet, dbg=False)
+
+    assert expected_error in e.value.args[0]
+    assert expected_name in e.value.args[0]
+
+
+def test_routine_iterator(parse_fortran_file):
+    data = """\
+    module foo
+      interface
+        module subroutine modsub1()
+        end subroutine modsub1
+        module subroutine modsub2()
+        end subroutine modsub2
+        module integer function modfunc1()
+        end function modfunc1
+        module integer function modfunc2()
+        end function modfunc2
+      end interface
+    contains
+      subroutine sub1()
+      end subroutine sub1
+      subroutine sub2()
+      end subroutine sub2
+      integer function func1()
+      end function func1
+      integer function func2()
+      end function func2
+    end module foo
+
+    submodule (foo) bar
+    contains
+      module subroutine modsub1
+      end subroutine modsub1
+      module subroutine modsub2
+      end subroutine modsub2
+      module procedure modfunc1
+      end procedure modfunc1
+      module procedure modfunc2
+      end procedure modfunc2
+
+      subroutine sub3()
+      end subroutine sub3
+      subroutine sub4()
+      end subroutine sub4
+      integer function func3()
+      end function func3
+      integer function func4()
+      end function func4
+    end submodule bar
+    """
+
+    fortran_file = parse_fortran_file(data)
+
+    module = fortran_file.modules[0]
+    assert sorted([proc.name for proc in module.routines]) == [
+        "func1",
+        "func2",
+        "sub1",
+        "sub2",
+    ]
+
+    submodule = fortran_file.submodules[0]
+    assert sorted([proc.name for proc in submodule.routines]) == [
+        "func3",
+        "func4",
+        "modfunc1",
+        "modfunc2",
+        "modsub1",
+        "modsub2",
+        "sub3",
+        "sub4",
+    ]
+
+
+def test_type_component_permissions(parse_fortran_file):
+    data = """\
+    module default_access
+      private
+      type :: type_default
+        complex :: component_public
+        complex, private :: component_private
+      contains
+        procedure :: sub_public
+        procedure, private :: sub_private
+      end type type_default
+
+      type, public :: type_public
+        public
+        complex :: component_public
+        complex, private :: component_private
+      contains
+        public
+        procedure :: sub_public
+        procedure, private :: sub_private
+      end type type_public
+
+      type :: type_private
+        private
+        character(len=1), public :: string_public
+        character(len=1) :: string_private
+      contains
+        private
+        procedure, public :: sub_public
+        procedure :: sub_private
+      end type type_private
+
+      type :: type_public_private
+        public
+        character(len=1) :: string_public
+        character(len=1), private :: string_private
+      contains
+        private
+        procedure, public :: sub_public
+        procedure :: sub_private
+      end type type_public_private
+
+      type :: type_private_public
+        private
+        character(len=1), public :: string_public
+        character(len=1) :: string_private
+      contains
+        public
+        procedure :: sub_public
+        procedure, private :: sub_private
+      end type type_private_public
+
+      public :: type_default, type_private_public, type_public_private
+    contains
+      subroutine sub_public
+      end subroutine sub_public
+
+      subroutine sub_private
+      end subroutine sub_private
+    end module default_access
+    """
+
+    fortran_file = parse_fortran_file(data)
+    fortran_file.modules[0].correlate(None)
+
+    for ftype in fortran_file.modules[0].types:
+        assert (
+            ftype.variables[0].permission == "public"
+        ), f"{ftype.name}::{ftype.variables[0].name}"
+        assert (
+            ftype.variables[1].permission == "private"
+        ), f"{ftype.name}::{ftype.variables[1].name}"
+        assert (
+            ftype.boundprocs[0].permission == "public"
+        ), f"{ftype.name}::{ftype.boundprocs[0].name}"
+        assert (
+            ftype.boundprocs[1].permission == "private"
+        ), f"{ftype.name}::{ftype.boundprocs[1].name}"
+
+
+def test_variable_formatting(parse_fortran_file):
+    data = """\
+    module foo_m
+      character(kind=kind('a'), len=4), dimension(:, :), allocatable :: multidimension_string
+      type :: bar
+      end type bar
+      type(bar), parameter :: something = bar()
+    contains
+      type(bar) function quux()
+      end function quux
+    end module foo_m
+    """
+
+    fortran_file = parse_fortran_file(data)
+    fortran_file.modules[0].correlate(None)
+    variable0 = fortran_file.modules[0].variables[0]
+    variable1 = fortran_file.modules[0].variables[1]
+
+    assert variable0.full_type == "character(kind=kind('a'), len=4)"
+    assert (
+        variable0.full_declaration
+        == "character(kind=kind('a'), len=4), dimension(:, :), allocatable"
+    )
+    assert variable1.full_type == "type(bar)"
+    assert variable1.full_declaration == "type(bar), parameter"
+
+    function = fortran_file.modules[0].functions[0]
+    assert function.retvar.full_declaration == "type(bar)"
+
+
+def test_url(parse_fortran_file):
+    data = """\
+    program prog_foo
+      integer :: int_foo
+    contains
+      subroutine sub_foo
+      end subroutine sub_foo
+      function func_foo()
+      end function func_foo
+    end program prog_foo
+
+    module mod_foo
+      real :: real_foo
+      interface inter_foo
+        module procedure foo1, foo2
+      end interface inter_foo
+      type :: foo_t
+        integer :: int_bar
+      end type
+      enum, bind(C)
+        enumerator :: red = 4, blue = 9
+        enumerator :: yellow
+      end enum
+    contains
+      subroutine foo1()
+      end subroutine foo1
+      subroutine foo2(x)
+        integer :: x
+      end subroutine foo2
+    end module mod_foo
+
+    submodule (mod_foo) submod_foo
+    end submodule submod_foo
+    """
+
+    fortran_file = parse_fortran_file(data)
+
+    assert fortran_file.programs[0].get_dir() == "program"
+    assert fortran_file.modules[0].get_dir() == "module"
+    assert fortran_file.submodules[0].get_dir() == "module"
+    assert fortran_file.programs[0].subroutines[0].get_dir() == "proc"
+    assert fortran_file.programs[0].functions[0].get_dir() == "proc"
+    assert fortran_file.modules[0].subroutines[0].get_dir() == "proc"
+    assert fortran_file.modules[0].interfaces[0].get_dir() == "interface"
+    assert fortran_file.programs[0].variables[0].get_dir() is None
+    assert fortran_file.modules[0].variables[0].get_dir() is None
+    assert fortran_file.modules[0].enums[0].get_dir() is None
+
+    assert fortran_file.programs[0].get_url().endswith("/program/prog_foo.html")
+    assert fortran_file.modules[0].get_url().endswith("/module/mod_foo.html")
+    assert fortran_file.submodules[0].get_url().endswith("/module/submod_foo.html")
+    assert (
+        fortran_file.programs[0].subroutines[0].get_url().endswith("/proc/sub_foo.html")
+    )
+    assert (
+        fortran_file.programs[0].functions[0].get_url().endswith("/proc/func_foo.html")
+    )
+    assert fortran_file.modules[0].subroutines[0].get_url().endswith("/proc/foo1.html")
+    assert (
+        fortran_file.modules[0]
+        .interfaces[0]
+        .get_url()
+        .endswith("/interface/inter_foo.html")
+    )
+    assert (
+        fortran_file.programs[0]
+        .variables[0]
+        .get_url()
+        .endswith("/program/prog_foo.html#variable-int_foo")
+    )
+    assert (
+        fortran_file.modules[0]
+        .variables[0]
+        .get_url()
+        .endswith("/module/mod_foo.html#variable-real_foo")
+    )
+
+
+def test_single_character_interface(parse_fortran_file):
+    data = """\
+    module a
+      interface b !! some comment
+        module procedure c
+      end interface b
+    end module a
+    """
+    fortran_file = parse_fortran_file(data)
+    assert fortran_file.modules[0].interfaces[0].name == "b"
+    assert fortran_file.modules[0].interfaces[0].doc == [" some comment"]
+
+
+def test_module_procedure_in_module(parse_fortran_file):
+    data = """\
+    module foo_mod
+      interface
+        module subroutine quaxx
+        end subroutine quaxx
+      end interface
+    contains
+      module procedure quaxx
+        print*, "implementation"
+      end procedure
+    end module foo_mod
+    """
+
+    fortran_file = parse_fortran_file(data)
+    module = fortran_file.modules[0]
+    module.correlate(None)
+
+    interface = module.interfaces[0]
+    assert interface.name == "quaxx"
+    modproc = module.modprocedures[0]
+
+    assert interface.procedure.module == modproc
+    assert modproc.module == interface
+
+
+def test_module_interface_same_name_as_interface(parse_fortran_file):
+    data = """\
+    module foo_m
+      interface foo
+        module function foo() result(bar)
+          logical bar
+        end function
+      end interface
+    contains
+      module procedure foo
+        bar = .true.
+      end procedure
+    end module
+    """
+
+    fortran_file = parse_fortran_file(data)
+    module = fortran_file.modules[0]
+    module.correlate(None)
+
+    interface = module.interfaces[0]
+    assert interface.name == "foo"
+
+    modproc = module.modprocedures[0]
+    assert modproc.name == "foo"
+
+
+def test_procedure_pointer(parse_fortran_file):
+    data = """\
+    module foo
+      abstract interface
+        integer pure function unary_f_t(n)
+          implicit none
+          integer, intent(in) :: n
+        end function
+      end interface
+
+      private
+
+      procedure(unary_f_t), pointer, public :: unary_f => null()
+
+      interface generic_unary_f
+        procedure unary_f
+      end interface
+    end module
+    """
+
+    fortran_file = parse_fortran_file(data)
+    module = fortran_file.modules[0]
+    module.correlate(None)
+    assert len(module.interfaces[0].modprocs) == 0
+    assert module.interfaces[0].variables[0].name == "unary_f"
+
+
+def test_block_data(parse_fortran_file):
+    data = """\
+    block data name
+      !! Block data docstring
+      common /name/ foo
+      !! Common block docstring
+
+      character*31 foo(1024)
+      !! Variable docstring
+
+      data foo /'a', 'b', 'c', 'd', 'e', 1019*'0'/
+    end
+    """
+
+    fortran_file = parse_fortran_file(data)
+    blockdata = fortran_file.blockdata[0]
+
+    assert blockdata.name == "name"
+    assert blockdata.doc[0].strip() == "Block data docstring"
+    assert len(blockdata.common) == 1
+    assert blockdata.common[0].doc[0].strip() == "Common block docstring"
+    assert len(blockdata.variables) == 1
+    assert blockdata.variables[0].doc[0].strip() == "Variable docstring"
+
+
+def test_subroutine_empty_args(parse_fortran_file):
+    data = """\
+    subroutine foo (    )
+    end subroutine foo
+    """
+
+    fortran_file = parse_fortran_file(data)
+    subroutine = fortran_file.subroutines[0]
+    assert subroutine.args == []
+
+
+def test_subroutine_whitespace(parse_fortran_file):
+    data = """\
+    subroutine foo (  a,b,    c,d  )
+      integer :: a, b, c, d
+    end subroutine foo
+    """
+
+    fortran_file = parse_fortran_file(data)
+    subroutine = fortran_file.subroutines[0]
+    arg_names = [arg.name for arg in subroutine.args]
+    assert arg_names == ["a", "b", "c", "d"]
+
+
+def test_function_empty_args(parse_fortran_file):
+    data = """\
+    integer function foo (    )
+    end function foo
+    """
+
+    fortran_file = parse_fortran_file(data)
+    function = fortran_file.functions[0]
+    assert function.args == []
+
+
+def test_function_whitespace(parse_fortran_file):
+    data = """\
+    integer function foo (  a,b,    c,d  )
+      integer :: a, b, c, d
+    end function foo
+    """
+
+    fortran_file = parse_fortran_file(data)
+    function = fortran_file.functions[0]
+    arg_names = [arg.name for arg in function.args]
+    assert arg_names == ["a", "b", "c", "d"]

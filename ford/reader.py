@@ -93,11 +93,11 @@ class FortranReader(object):
     """
 
     # Regexes
-    COM_RE = re.compile("^([^\"'!]|('[^']*')|(\"[^\"]*\"))*(!.*)$")
-    SC_RE = re.compile("^([^;]*);(.*)$")
-    # DECL_RE = re.compile("^(.*)\:\:.*(.*&)(.*$)")
-    # DECL_RE = re.compile("^(.*)\:\: *(([a-zA-Z].*),)?(.*&)(.*$)")
-    DECL_RE = re.compile("^(.*)\:\: *([a-zA-Z].*)?( *&)(.*$)")
+    COM_RE = re.compile(r"^([^\"'!]|('[^']*')|(\"[^\"]*\"))*(!.*)$")
+    SC_RE = re.compile(r"^([^;]*);(.*)$")
+    # DECL_RE = re.compile(r"^(.*)\:\:.*(.*&)(.*$)")
+    # DECL_RE = re.compile(r"^(.*)\:\: *(([a-zA-Z].*),)?(.*&)(.*$)")
+    DECL_RE = re.compile(r"^(.*)\:\: *([a-zA-Z].*)?( *&)(.*$)")
 
     def __init__(
         self,
@@ -172,13 +172,13 @@ class FortranReader(object):
         self.reading_alt = 0
         self.docmark = docmark
         self.doc_re = re.compile(
-            "^([^\"'!]|('[^']*')|(\"[^\"]*\"))*(!{}.*)$".format(re.escape(docmark))
+            r"^([^\"'!]|('[^']*')|(\"[^\"]*\"))*(!{}.*)$".format(re.escape(docmark))
         )
         self.predocmark = predocmark
         self.encoding = encoding
         if len(self.predocmark) != 0:
             self.predoc_re = re.compile(
-                "^([^\"'!]|('[^']*')|(\"[^\"]*\"))*(!{}.*)$".format(
+                r"^([^\"'!]|('[^']*')|(\"[^\"]*\"))*(!{}.*)$".format(
                     re.escape(predocmark)
                 )
             )
@@ -187,7 +187,7 @@ class FortranReader(object):
         self.docmark_alt = docmark_alt
         if len(self.docmark_alt) != 0:
             self.doc_alt_re = re.compile(
-                "^([^\"'!]|('[^']*')|(\"[^\"]*\"))*(!{}.*)$".format(
+                r"^([^\"'!]|('[^']*')|(\"[^\"]*\"))*(!{}.*)$".format(
                     re.escape(docmark_alt)
                 )
             )
@@ -196,7 +196,7 @@ class FortranReader(object):
         self.predocmark_alt = predocmark_alt
         if len(self.predocmark_alt) != 0:
             self.predoc_alt_re = re.compile(
-                "^([^\"'!]|('[^']*')|(\"[^\"]*\"))*(!{}.*)$".format(
+                r"^([^\"'!]|('[^']*')|(\"[^\"]*\"))*(!{}.*)$".format(
                     re.escape(predocmark_alt)
                 )
             )
@@ -315,7 +315,7 @@ class FortranReader(object):
                     done = True
                     if match.group(2):
                         line = re.sub(
-                            self.decl_type.replace("(", "\(").replace(")", "\)")
+                            self.decl_type.replace("(", r"\(").replace(")", r"\)")
                             + " *::",
                             "",
                             line.strip(),

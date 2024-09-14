@@ -29,7 +29,7 @@ import re
 import os.path
 import copy
 import textwrap
-from typing import List, Tuple, Optional, Union
+from typing import List, Tuple, Optional, Union, Sequence, Dict
 from itertools import chain
 
 # Python 2 or 3:
@@ -70,7 +70,7 @@ DIM_RE = re.compile(r"^\w+\s*(\(.*\))\s*$")
 base_url = ""
 
 
-class FortranBase(object):
+class FortranBase:
     """
     An object containing the data common to all of the classes used to represent
     Fortran data.
@@ -134,60 +134,46 @@ class FortranBase(object):
         self.hierarchy.reverse()
 
     @property
-    def filename(self):
+    def filename(self) -> str:
         """Name of the file containing this entity"""
         # If `hierarchy` is empty, it's probably because it's a source
         # file, so we can use its name directly
         return self.hierarchy[0].name if self.hierarchy else self.name
 
-    def get_dir(self):
-        if (
-            type(self)
-            in [
-                FortranSubroutine,
-                ExternalSubroutine,
-                FortranFunction,
-                ExternalFunction,
-            ]
-            and type(self.parent) in [FortranInterface, ExternalInterface]
-            and not self.parent.generic
-        ):
-            return "interface"
-        elif type(self) is FortranSubmodule:
-            return "module"
-        elif type(self) in [
-            FortranSourceFile,
-            FortranProgram,
-            FortranModule,
-            GenericSource,
-            FortranBlockData,
-            ExternalModule,
-        ] or (
-            type(self)
-            in [
-                FortranType,
-                ExternalType,
-                FortranInterface,
-                ExternalInterface,
-                FortranFunction,
-                ExternalFunction,
-                FortranSubroutine,
-                ExternalSubroutine,
-                FortranSubmoduleProcedure,
-            ]
-            and type(self.parent)
-            in [
+    def get_dir(self) -> Optional[str]:
+        if isinstance(
+            self,
+            (
                 FortranSourceFile,
                 FortranProgram,
                 FortranModule,
-                FortranSubmodule,
+                GenericSource,
                 FortranBlockData,
-                ExternalModule,
-            ]
+            ),
+        ) or (
+            isinstance(
+                self,
+                (
+                    FortranType,
+                    FortranInterface,
+                    FortranProcedure,
+                    FortranSubmoduleProcedure,
+                ),
+            )
+            and isinstance(
+                self.parent,
+                (
+                    FortranSourceFile,
+                    FortranProgram,
+                    FortranModule,
+                    FortranSubmodule,
+                    FortranBlockData,
+                ),
+            )
         ):
             return self.obj
-        else:
-            return None
+
+        return None
 
     def get_url(self):
         if hasattr(self, "external_url"):
@@ -233,12 +219,6 @@ class FortranBase(object):
     @property
     def ident(self) -> str:
         """Return a unique identifier for this object"""
-        if (
-            isinstance(self, (FortranSubroutine, FortranFunction))
-            and isinstance(self.parent, FortranInterface)
-            and not self.parent.generic
-        ):
-            return namelist.get_name(self.parent)
         return namelist.get_name(self)
 
     @property
@@ -523,6 +503,17 @@ class FortranBase(object):
             filter(None, (getattr(self, item, None) for item in non_list_children)),
         )
 
+    def _should_display(self, item) -> bool:
+        """Return True if item should be displayed"""
+        if self.settings["hide_undoc"] and not item.doc:
+            return False
+        return item.permission in self.display
+
+    def filter_display(self, collection: Sequence) -> List:
+        """Remove items from collection if they shouldn't be displayed"""
+
+        return [obj for obj in collection if self._should_display(obj)]
+
 
 class FortranContainer(FortranBase):
     """
@@ -556,21 +547,33 @@ class FortranContainer(FortranBase):
     )
     PROGRAM_RE = re.compile(r"^program(?:\s+(\w+))?$", re.IGNORECASE)
     SUBROUTINE_RE = re.compile(
-        r"^\s*(?:(.+?)\s+)?subroutine\s+(\w+)\s*(\([^()]*\))?(?:\s*bind\s*\(\s*(.*)\s*\))?$",
-        re.IGNORECASE,
+        r"""^\s*(?:(?P<attributes>.+?)\s+)?     # Optional attributes
+        subroutine\s+(?P<name>\w+)\s*           # Required subroutine name
+        (?P<arguments>\([^()]*\))?              # Optional arguments
+        (?:\s*bind\s*\(\s*(?P<bindC>.*)\s*\))?$ # Optional C-binding""",
+        re.IGNORECASE | re.VERBOSE,
     )
     FUNCTION_RE = re.compile(
-        r"^(?:(.+?)\s+)?function\s+(\w+)\s*(\([^()]*\))?(?=(?:.*result\s*\(\s*(\w+)\s*\))?)(?=(?:.*bind\s*\(\s*(.*)\s*\))?).*$",
-        re.IGNORECASE,
+        r"""^(?:(?P<attributes>.+?)\s+)?               # Optional attributes (including type)
+        function\s+(?P<name>\w+)\s*                    # Required function name
+        (?P<arguments>\([^()]*\))?                     # Required arguments
+        (?=(?:.*result\s*\(\s*(?P<result>\w+)\s*\))?)  # Optional result name
+        (?=(?:.*bind\s*\(\s*(?P<bindC>.*)\s*\))?).*$   # Optional C-binding""",
+        re.IGNORECASE | re.VERBOSE,
     )
     TYPE_RE = re.compile(
         r"^type(?:\s+|\s*(,.*)?::\s*)((?!(?:is\s*\())\w+)\s*(\([^()]*\))?\s*$",
         re.IGNORECASE,
     )
     INTERFACE_RE = re.compile(r"^(abstract\s+)?interface(?:\s+(.+))?$", re.IGNORECASE)
-    # ~ ABS_INTERFACE_RE = re.compile(r"^abstract\s+interface(?:\s+(\S.+))?$",re.IGNORECASE)
     BOUNDPROC_RE = re.compile(
-        r"^(generic|procedure)\s*(\([^()]*\))?\s*(.*)\s*::\s*(\w.*)", re.IGNORECASE
+        r"""^(?P<generic>generic|procedure)\s*  # Required keyword
+        (?P<prototype>\([^()]*\))?\s*           # Optional interface name
+        (?:,\s*(?P<attributes>\w[^:]*))?        # Optional list of attributes
+        (?:\s*::)?\s*                           # Optional double-colon
+        (?P<names>\w.*)$                        # Required name(s)
+        """,
+        re.IGNORECASE | re.VERBOSE,
     )
     COMMON_RE = re.compile(r"^common(?:\s*/\s*(\w+)\s*/\s*|\s+)(\w+.*)", re.IGNORECASE)
     COMMON_SPLIT_RE = re.compile(r"\s*(/\s*\w+\s*/)\s*", re.IGNORECASE)
@@ -581,10 +584,11 @@ class FortranContainer(FortranBase):
     )
     ARITH_GOTO_RE = re.compile(r"go\s*to\s*\([0-9,\s]+\)", re.IGNORECASE)
     CALL_RE = re.compile(
-        r"(?:^|[^a-zA-Z0-9_% ]\s*)(\w+)(?=\s*\(\s*(?:.*?)\s*\))", re.IGNORECASE
+        r"(?:^|[^a-zA-Z0-9_% ]\s*(?:\w+%)?)(\w+)(?=\s*\(\s*(?:.*?)\s*\))", re.IGNORECASE
     )
     SUBCALL_RE = re.compile(
-        r"^(?:if\s*\(.*\)\s*)?call\s+(\w+)\s*(?:\(\s*(.*?)\s*\))?$", re.IGNORECASE
+        r"^(?:if\s*\(.*\)\s*)?call\s+(?:\w+%)?(\w+)\s*(?:\(\s*(.*?)\s*\))?$",
+        re.IGNORECASE,
     )
     FORMAT_RE = re.compile(r"^[0-9]+\s+format\s+\(.*\)", re.IGNORECASE)
 
@@ -653,7 +657,7 @@ class FortranContainer(FortranBase):
 
             # Check the various possibilities for what is on this line
             if line_lower == "contains":
-                if not incontains and type(self) in _can_have_contains:
+                if not incontains and isinstance(self, _can_have_contains):
                     incontains = True
                     if isinstance(self, FortranType):
                         child_permission = "public"
@@ -839,26 +843,29 @@ class FortranContainer(FortranBase):
                     self.print_error(line, "Unexpected ENUM")
 
             elif (match := self.BOUNDPROC_RE.match(line)) and incontains:
-                if hasattr(self, "boundprocs"):
-                    split = match.group(4).split(",")
-                    split.reverse()
-                    if match.group(1).lower() == "generic" or len(split) == 1:
-                        self.boundprocs.append(
-                            FortranBoundProcedure(source, match, self, child_permission)
-                        )
-                    else:
-                        for bind in split:
-                            pseudo_line = line[: match.start(4)] + bind
-                            self.boundprocs.append(
-                                FortranBoundProcedure(
-                                    source,
-                                    self.BOUNDPROC_RE.match(pseudo_line),
-                                    self,
-                                    child_permission,
-                                )
-                            )
-                else:
+                if not hasattr(self, "boundprocs"):
                     self.print_error(line, "Unexpected type-bound procedure")
+                    continue
+
+                names = match["names"].split(",")
+                # Generic procedures or single name
+                if match["generic"].lower() == "generic" or len(names) == 1:
+                    self.boundprocs.append(
+                        FortranBoundProcedure(source, match, self, child_permission)
+                    )
+                    continue
+
+                # For multiple procedures, parse each one as if it
+                # were on a line by itself
+                for bind in reversed(names):
+                    pseudo_line = self.BOUNDPROC_RE.match(
+                        line[: match.start("names")] + bind
+                    )
+                    self.boundprocs.append(
+                        FortranBoundProcedure(
+                            source, pseudo_line, self, child_permission
+                        )
+                    )
 
             elif match := self.COMMON_RE.match(line):
                 if hasattr(self, "common"):
@@ -1056,9 +1063,9 @@ class FortranCodeUnit(FortranContainer):
                 argname = False
                 for a in getattr(self, "args", []):
                     # Consider allowing procedures passed as arguments to be included in callgraphs
-                    argname = argname or call_low == a.name.lower()
+                    argname |= call_low == a.name.lower()
                 if hasattr(self, "retvar"):
-                    argname = argname or call_low == self.retvar.name.lower()
+                    argname |= call_low == self.retvar.name.lower()
                 if (
                     not argname
                     and call_low not in self.all_vars
@@ -1066,20 +1073,20 @@ class FortranCodeUnit(FortranContainer):
                 ):
                     tmplst.append(call)
             self.calls = tmplst
-            fileprocs = {}
-            if self.parobj == "sourcefile":
-                for proc in self.parent.subroutines + self.parent.functions:
-                    fileprocs[proc.name.lower()] = proc
-            for i in range(len(self.calls)):
-                if self.calls[i].lower() in self.all_procs:
-                    self.calls[i] = self.all_procs[self.calls[i].lower()]
-                elif self.calls[i].lower() in fileprocs:
-                    self.calls[i] = fileprocs[self.calls[i].lower()]
-                else:
-                    for proc in project.procedures:
-                        if self.calls[i] == proc.name.lower():
-                            self.calls[i] = proc
-                            break
+
+            procedures = (
+                {proc.name.lower(): proc for proc in self.parent.routines}
+                if self.parobj == "sourcefile"
+                else {}
+            )
+            procedures.update({proc.name.lower(): proc for proc in project.procedures})
+            procedures.update(self.all_procs)
+
+            for i, call in enumerate(self.calls):
+                try:
+                    self.calls[i] = procedures[call.lower()]
+                except KeyError:
+                    pass
 
         if self.obj == "submodule":
             self.ancestry = []
@@ -1093,21 +1100,16 @@ class FortranCodeUnit(FortranContainer):
         for dtype in typeorder:
             if dtype in self.types:
                 dtype.correlate(project)
-        for func in self.functions:
-            func.correlate(project)
-        for subrtn in self.subroutines:
-            subrtn.correlate(project)
-        for interface in self.interfaces:
-            interface.correlate(project)
-        for absint in self.absinterfaces:
-            absint.correlate(project)
-        for var in self.variables:
-            var.correlate(project)
-        for com in self.common:
-            com.correlate(project)
-        if hasattr(self, "modprocedures"):
-            for mp in self.modprocedures:
-                mp.correlate(project)
+        for entity in self.iterator(
+            "functions",
+            "subroutines",
+            "interfaces",
+            "absinterfaces",
+            "variables",
+            "common",
+            "modprocedures",
+        ):
+            entity.correlate(project)
         if hasattr(self, "args") and not getattr(self, "mp", False):
             for arg in self.args:
                 arg.correlate(project)
@@ -1194,12 +1196,6 @@ class FortranCodeUnit(FortranContainer):
         Remove anything which shouldn't be displayed.
         """
 
-        def to_include(obj):
-            inc = obj.permission in self.display
-            if self.settings["hide_undoc"] and not obj.doc:
-                inc = False
-            return inc
-
         if self.obj == "proc" and not self.meta["proc_internals"]:
             self.functions = []
             self.subroutines = []
@@ -1207,38 +1203,26 @@ class FortranCodeUnit(FortranContainer):
             self.interfaces = []
             self.absinterfaces = []
             self.variables = []
-        else:
-            self.functions = [obj for obj in self.functions if to_include(obj)]
-            self.subroutines = [obj for obj in self.subroutines if to_include(obj)]
-            self.types = [obj for obj in self.types if to_include(obj)]
-            self.interfaces = [obj for obj in self.interfaces if to_include(obj)]
-            self.absinterfaces = [obj for obj in self.absinterfaces if to_include(obj)]
-            self.variables = [obj for obj in self.variables if to_include(obj)]
-            if hasattr(self, "modprocedures"):
-                self.modprocedures = [
-                    obj for obj in self.modprocedures if to_include(obj)
-                ]
-            if hasattr(self, "modsubroutines"):
-                self.modsubroutines = [
-                    obj for obj in self.modsubroutines if to_include(obj)
-                ]
-            if hasattr(self, "modfunctions"):
-                self.modfunctions = [
-                    obj for obj in self.modfunctions if to_include(obj)
-                ]
+            return
+
+        self.functions = self.filter_display(self.functions)
+        self.subroutines = self.filter_display(self.subroutines)
+        self.types = self.filter_display(self.types)
+        self.interfaces = self.filter_display(self.interfaces)
+        self.absinterfaces = self.filter_display(self.absinterfaces)
+        self.variables = self.filter_display(self.variables)
+        if self.obj == "submodule":
+            self.modprocedures = self.filter_display(self.modprocedures)
+            self.modsubroutines = self.filter_display(self.modsubroutines)
+            self.modfunctions = self.filter_display(self.modfunctions)
+
         # Recurse
-        for obj in self.absinterfaces:
-            obj.visible = True
         for obj in self.iterator(
-            "functions",
-            "subroutines",
-            "types",
+            "absinterfaces",
             "interfaces",
-            "modprocedures",
-            "modfunctions",
-            "modsubroutines",
         ):
             obj.visible = True
+
         for obj in self.iterator(
             "functions",
             "subroutines",
@@ -1247,6 +1231,7 @@ class FortranCodeUnit(FortranContainer):
             "modfunctions",
             "modsubroutines",
         ):
+            obj.visible = True
             obj.prune()
 
 
@@ -1292,21 +1277,14 @@ class FortranSourceFile(FortranContainer):
             settings["encoding"],
         )
 
-        FortranContainer.__init__(self, source, "")
+        super().__init__(source, "")
         with open(self.path, "r", encoding=settings["encoding"]) as readobj:
             self.raw_src = readobj.read()
-        if self.fixed:
-            self.src = highlight(
-                self.raw_src,
-                FortranFixedLexer(),
-                HtmlFormatter(lineanchors="ln", cssclass="hl"),
-            )
-        else:
-            self.src = highlight(
-                self.raw_src,
-                FortranLexer(),
-                HtmlFormatter(lineanchors="ln", cssclass="hl"),
-            )
+
+        lexer = FortranFixedLexer() if self.fixed else FortranLexer()
+        self.src = highlight(
+            self.raw_src, lexer, HtmlFormatter(lineanchors="ln", cssclass="hl")
+        )
 
 
 class FortranModule(FortranCodeUnit):
@@ -1361,7 +1339,7 @@ class FortranModule(FortranCodeUnit):
         self.variables = [v for v in self.variables if "external" not in v.attribs]
 
         def should_be_public(item: FortranBase) -> bool:
-            return item.permission == "public" or item.permission == "protected"
+            return item.permission in ["public", "protected"]
 
         def filter_public(collection: list) -> dict:
             return {
@@ -1435,8 +1413,13 @@ class FortranSubmodule(FortranModule):
                 for proc in interface.iterator("subroutines", "functions"):
                     self.all_procs[proc.name.lower()] = proc
 
+    def get_dir(self):
+        return "module"
 
-def _list_of_procedure_attributes(attribute_string: str) -> Tuple[List[str], str]:
+
+def _list_of_procedure_attributes(
+    attribute_string: Optional[str],
+) -> Tuple[List[str], str]:
     """Convert a string of attributes into a list of attributes"""
     if not attribute_string:
         return [], ""
@@ -1461,214 +1444,205 @@ def _list_of_procedure_attributes(attribute_string: str) -> Tuple[List[str], str
     return attribute_list, attribute_string.replace(" ", "")
 
 
-class FortranSubroutine(FortranCodeUnit):
+def implicit_type(name: str) -> str:
+    """Map names to implicit types"""
+
+    if name[0].lower() in "ijklmn":
+        return "integer"
+    return "real"
+
+
+class FortranProcedure(FortranCodeUnit):
+    """Base class for subroutines and functions for common functionality"""
+
+    def _procedure_initialize(
+        self,
+        name: str,
+        arguments: Optional[str],
+        attributes: Optional[str],
+        bindC: Optional[str],
+        **kwargs,
+    ) -> str:
+        self.name = name
+        self.attribs, attribstr = _list_of_procedure_attributes(attributes)
+        self.mp = False
+        self.module = "module" in self.attribs
+
+        self.args = []
+        if arguments:
+            # Empty argument lists will contain the empty string, so we need to remove it
+            self.args = [
+                arg for arg in self.SPLIT_RE.split(arguments[1:-1].strip()) if arg
+            ]
+
+        self._parse_bind_C(bindC)
+        self.variables: List[FortranVariable] = []
+        self.enums: List[FortranEnum] = []
+        self.uses = []
+        self.calls = []
+        self.subroutines: List[FortranSubroutine] = []
+        self.functions: List[FortranFunction] = []
+        self.interfaces: List[FortranInterface] = []
+        self.absinterfaces: List[FortranInterface] = []
+        self.types: List[FortranType] = []
+        self.common: List[FortranCommon] = []
+        self.attr_dict: Dict[str, List[str]] = defaultdict(list)
+        self.param_dict: Dict[str, str] = dict()
+        self.associate_blocks = []
+
+        return attribstr
+
+    def _parse_bind_C(self, bind_C_text: Optional[str]):
+        """Parses a `bind(...)` attribute"""
+
+        if bind_C_text is None:
+            self.bindC = None
+            return
+
+        # Shouldn't have parentheses in, but just to be safe, let's
+        # remove any
+        if "(" in bind_C_text or ")" in bind_C_text:
+            bind_C_text = ford.utils.get_parens(bind_C_text, -1)
+
+        self.bindC = bind_C_text
+
+        # Now we have to replace any quoted text that has previously
+        # been removed
+        search_from = 0
+        while quote := QUOTES_RE.search(self.bindC[search_from:]):
+            num = int(quote.group()[1:-1])
+            self.bindC = self.bindC[0:search_from] + QUOTES_RE.sub(
+                self.parent.strings[num], self.bindC[search_from:], count=1
+            )
+            if not (next_match := QUOTES_RE.search(self.bindC[search_from:])):
+                raise ValueError(
+                    f"Unexpected missing quotes in '{self.bindC[search_from:]}'"
+                )
+            search_from += next_match.end(0)
+
+    @property
+    def is_interface_procedure(self) -> bool:
+        """Is this procedure just an interface?"""
+        return isinstance(self.parent, FortranInterface) and not self.parent.generic
+
+    @property
+    def permission(self):
+        """Permission (public/private) of this procedure"""
+        if self.is_interface_procedure:
+            return self.parent.permission
+
+        return self._permission
+
+    @permission.setter
+    def permission(self, value):
+        self._permission = value
+
+    @property
+    def ident(self) -> str:
+        """Return a unique identifier for this object"""
+        if self.is_interface_procedure:
+            return namelist.get_name(self.parent)
+        return super().ident
+
+    def get_dir(self) -> Optional[str]:
+        if self.is_interface_procedure:
+            return "interface"
+
+        return super().get_dir()
+
+    def _cleanup(self):
+        """Convert all child entities to object instances"""
+
+        self.all_procs = {p.name.lower(): p for p in self.routines}
+        for interface in self.interfaces:
+            if not interface.abstract:
+                self.all_procs[interface.name.lower()] = interface
+            if interface.generic:
+                for proc in interface.routines:
+                    self.all_procs[proc.name.lower()] = proc
+
+        for i, arg in enumerate(self.args):
+            # Is there a variable declaration for this argument?
+            for var in self.variables:
+                if arg.lower() == var.name.lower():
+                    arg = var
+                    self.variables.remove(var)
+                    break
+
+            # Otherwise, is it a procedure with an interface?
+            if isinstance(arg, str):
+                for intr in self.interfaces:
+                    if intr.abstract or intr.generic:
+                        continue
+                    proc = intr.procedure
+                    if proc.name.lower() == arg.lower():
+                        arg = proc
+                        arg.parent = self
+                        self.interfaces.remove(intr)
+                        break
+
+            # If we've still not found it, it's an implicitly-type variable.
+            # FIXME: we pay no attention to `implicit none` or other
+            # `implicit` statements
+            if isinstance(arg, str):
+                arg = FortranVariable(arg, implicit_type(arg), self, doc="")
+
+            self.args[i] = arg
+
+        self.process_attribs()
+        self.variables = [v for v in self.variables if "external" not in v.attribs]
+
+
+class FortranSubroutine(FortranProcedure):
     """
     An object representing a Fortran subroutine and holding all of said
     subroutine's contents.
     """
 
-    def _initialize(self, line):
+    def _initialize(self, line: re.Match):
+        self._procedure_initialize(**line.groupdict())
         self.proctype = "Subroutine"
-        self.name = line.group(2)
-        attribstr = line.group(1)
-        self.module = False
-        self.mp = False
-        self.attribs, attribstr = _list_of_procedure_attributes(attribstr)
-        self.module = "module" in self.attribs
-
-        self.args = []
-        if line.group(3):
-            arguments = self.SPLIT_RE.split(line.group(3)[1:-1].strip())
-            # Empty argument lists will contain the empty string, so we need to remove it
-            self.args = [arg for arg in arguments if arg]
-
-        self.bindC = line.group(4)
-        self.variables = []
-        self.enums = []
-        self.uses = []
-        self.calls = []
-        self.optional_list = []
-        self.subroutines = []
-        self.functions = []
-        self.interfaces = []
-        self.absinterfaces = []
-        self.types = []
-        self.common = []
-        self.attr_dict = defaultdict(list)
-        self.param_dict = dict()
-        self.associate_blocks = []
-
-    def set_permission(self, value):
-        self._permission = value
-
-    def get_permission(self):
-        if type(self.parent) == FortranInterface and not self.parent.generic:
-            return self.parent.permission
-        else:
-            return self._permission
-
-    permission = property(get_permission, set_permission)
-
-    def _cleanup(self):
-        self.all_procs = {}
-        for p in self.routines:
-            self.all_procs[p.name.lower()] = p
-        for interface in self.interfaces:
-            if not interface.abstract:
-                self.all_procs[interface.name.lower()] = interface
-            if interface.generic:
-                for proc in interface.iterator("subroutines", "functions"):
-                    self.all_procs[proc.name.lower()] = proc
-        for i in range(len(self.args)):
-            for var in self.variables:
-                if self.args[i].lower() == var.name.lower():
-                    self.args[i] = var
-                    self.variables.remove(var)
-                    break
-            if type(self.args[i]) == str:
-                for intr in self.interfaces:
-                    if not (intr.abstract or intr.generic):
-                        proc = intr.procedure
-                        if proc.name.lower() == self.args[i].lower():
-                            self.args[i] = proc
-                            self.interfaces.remove(intr)
-                            self.args[i].parent = self
-                            break
-            if type(self.args[i]) == str:
-                if self.args[i][0].lower() in "ijklmn":
-                    vartype = "integer"
-                else:
-                    vartype = "real"
-                self.args[i] = FortranVariable(self.args[i], vartype, self)
-                self.args[i].doc = ""
-        self.process_attribs()
-        self.variables = [v for v in self.variables if "external" not in v.attribs]
 
 
-class FortranFunction(FortranCodeUnit):
+class FortranFunction(FortranProcedure):
     """
     An object representing a Fortran function and holding all of said function's
     contents.
     """
 
-    def _initialize(self, line):
+    def _initialize(self, line: re.Match):
+        attribstr = self._procedure_initialize(**line.groupdict())
         self.proctype = "Function"
-        self.name = line.group(2)
-        attribstr = line.group(1)
-        self.module = False
-        self.mp = False
+        self.retvar = line["result"] or self.name
 
-        self.attribs, attribstr = _list_of_procedure_attributes(attribstr)
-        self.module = "module" in self.attribs
-
-        if line.group(4):
-            self.retvar = line.group(4)
-        else:
-            self.retvar = self.name
-
-        typestr = ""
-        for vtype in self.settings["extra_vartypes"]:
-            typestr = typestr + "|" + vtype
-        var_type_re = re.compile(VAR_TYPE_STRING + typestr, re.IGNORECASE)
-        if var_type_re.search(attribstr):
-            parsed_type = parse_type(attribstr, self.strings, self.settings)
+        try:
+            parsed_type = parse_type(
+                attribstr, self.strings, self.settings["extra_vartypes"]
+            )
             self.retvar = FortranVariable(
-                self.retvar,
-                parsed_type.vartype,
-                self,
+                name=self.retvar,
+                vartype=parsed_type.vartype,
+                parent=self,
                 kind=parsed_type.kind,
                 strlen=parsed_type.strlen,
                 proto=parsed_type.proto,
             )
-
-        arguments = self.SPLIT_RE.split(line.group(3)[1:-1].strip())
-        # Empty argument lists will contain the empty string, so we need to remove it
-        self.args = [arg for arg in arguments if arg]
-
-        try:
-            self.bindC = ford.utils.get_parens(line.group(5), -1)[0:-1]
-        except (RuntimeError, TypeError):
-            self.bindC = line.group(5)
-        if self.bindC:
-            search_from = 0
-            while quote := QUOTES_RE.search(self.bindC[search_from:]):
-                num = int(quote.group()[1:-1])
-                self.bindC = self.bindC[0:search_from] + QUOTES_RE.sub(
-                    self.parent.strings[num], self.bindC[search_from:], count=1
-                )
-                search_from += QUOTES_RE.search(self.bindC[search_from:]).end(0)
-        self.variables = []
-        self.enums = []
-        self.uses = []
-        self.calls = []
-        self.optional_list = []
-        self.subroutines = []
-        self.functions = []
-        self.interfaces = []
-        self.absinterfaces = []
-        self.types = []
-        self.common = []
-        self.attr_dict = defaultdict(list)
-        self.param_dict = dict()
-        self.associate_blocks = []
-
-    def set_permission(self, value):
-        self._permission = value
-
-    def get_permission(self):
-        if type(self.parent) == FortranInterface and not self.parent.generic:
-            return self.parent.permission
-        else:
-            return self._permission
-
-    permission = property(get_permission, set_permission)
+        except ValueError:
+            pass
 
     def _cleanup(self):
-        self.all_procs = {}
-        for p in self.routines:
-            self.all_procs[p.name.lower()] = p
-        for interface in self.interfaces:
-            if not interface.abstract:
-                self.all_procs[interface.name.lower()] = interface
-            if interface.generic:
-                for proc in interface.iterator("subroutines", "functions"):
-                    self.all_procs[proc.name.lower()] = proc
-        for i in range(len(self.args)):
-            for var in self.variables:
-                if self.args[i].lower() == var.name.lower():
-                    self.args[i] = var
-                    self.variables.remove(var)
-                    break
-            if type(self.args[i]) == str:
-                for intr in self.interfaces:
-                    if not (intr.abstract or intr.generic):
-                        proc = intr.procedure
-                        if proc.name.lower() == self.args[i].lower():
-                            self.args[i] = proc
-                            self.interfaces.remove(intr)
-                            self.args[i].parent = self
-                            break
-            if type(self.args[i]) == str:
-                if self.args[i][0].lower() in "ijklmn":
-                    vartype = "integer"
-                else:
-                    vartype = "real"
-                self.args[i] = FortranVariable(self.args[i], vartype, self)
-                self.args[i].doc = ""
-        if type(self.retvar) != FortranVariable:
+        if not isinstance(self.retvar, FortranVariable):
             for var in self.variables:
                 if var.name.lower() == self.retvar.lower():
                     self.retvar = var
                     self.variables.remove(var)
                     break
             else:
-                if self.retvar[0].lower() in "ijklmn":
-                    vartype = "integer"
-                else:
-                    vartype = "real"
-                self.retvar = FortranVariable(self.retvar, vartype, self)
-        self.process_attribs()
-        self.variables = [v for v in self.variables if "external" not in v.attribs]
+                self.retvar = FortranVariable(
+                    self.retvar, implicit_type(self.retvar), self
+                )
+
+        super()._cleanup()
 
 
 class FortranSubmoduleProcedure(FortranCodeUnit):
@@ -1864,23 +1838,19 @@ class FortranType(FortranContainer):
             self.num_lines_all += proc.procedure.num_lines
         for proc in self.boundprocs:
             for bind in proc.bindings:
-                if isinstance(bind, (FortranFunction, FortranSubroutine)):
+                if isinstance(bind, FortranProcedure):
                     self.num_lines_all += bind.num_lines
                 elif isinstance(bind, FortranBoundProcedure):
                     for b in bind.bindings:
-                        if isinstance(b, (FortranFunction, FortranSubroutine)):
+                        if isinstance(b, FortranProcedure):
                             self.num_lines_all += b.num_lines
 
     def prune(self):
         """
         Remove anything which shouldn't be displayed.
         """
-        self.boundprocs = [
-            obj for obj in self.boundprocs if obj.permission in self.display
-        ]
-        self.variables = [
-            obj for obj in self.variables if obj.permission in self.display
-        ]
+        self.boundprocs = self.filter_display(self.boundprocs)
+        self.variables = self.filter_display(self.variables)
         for obj in self.boundprocs + self.variables:
             obj.visible = True
 
@@ -1947,9 +1917,7 @@ class FortranInterface(FortranContainer):
         self.generic = bool(self.name)
         self.abstract = bool(line.group(1))
         if self.generic and self.abstract:
-            raise Exception(
-                "Generic interface {} can not be abstract".format(self.name)
-            )
+            raise Exception(f"Generic interface '{self.name}' can not be abstract")
 
     def correlate(self, project):
         self.all_absinterfaces = self.parent.all_absinterfaces
@@ -1988,34 +1956,22 @@ class FortranInterface(FortranContainer):
         self.sort_components()
 
     def _cleanup(self):
-        if self.abstract:
-            contents = []
-            for proc in self.routines:
-                proc.visible = False
-                item = copy.copy(self)
-                item.procedure = proc
-                item.procedure.parent = item
-                del item.functions
-                del item.modprocs
-                del item.subroutines
-                item.name = proc.name
-                item.permission = proc.permission
-                contents.append(item)
-            self.contents = contents
-        elif not self.generic:
-            contents = []
-            for proc in self.routines:
-                proc.visible = False
-                item = copy.copy(self)
-                item.procedure = proc
-                item.procedure.parent = item
-                del item.functions
-                del item.modprocs
-                del item.subroutines
-                item.name = proc.name
-                item.permission = proc.permission
-                contents.append(item)
-            self.contents = contents
+        if not self.abstract and self.generic:
+            return
+
+        contents = []
+        for proc in self.routines:
+            proc.visible = False
+            item = copy.copy(self)
+            item.procedure = proc
+            item.procedure.parent = item
+            del item.functions
+            del item.modprocs
+            del item.subroutines
+            item.name = proc.name
+            item.permission = proc.permission
+            contents.append(item)
+        self.contents = contents
 
 
 class FortranFinalProc(FortranBase):
@@ -2090,7 +2046,7 @@ class FortranVariable(FortranBase):
         self.kind = kind
         self.strlen = strlen
         self.proto = copy.copy(proto)
-        self.doc = copy.copy(doc) or []
+        self.doc = copy.copy(doc) if doc is not None else []
         self.permission = permission
         self.points = points
         self.parameter = parameter
@@ -2185,27 +2141,25 @@ class FortranBoundProcedure(FortranBase):
     An object representing a type-bound procedure, possibly overloaded.
     """
 
-    def _initialize(self, line):
-        attribstr = line.group(3)
+    def _initialize(self, line: re.Match):
         self.attribs = []
         self.deferred = False
-        if attribstr:
-            tmp_attribs = ford.utils.paren_split(",", attribstr[1:])
-            for i in range(len(tmp_attribs)):
-                tmp_attribs[i] = tmp_attribs[i].strip()
-                if tmp_attribs[i].lower() == "public":
-                    self.permission = "public"
-                elif tmp_attribs[i].lower() == "private":
-                    self.permission = "private"
-                elif tmp_attribs[i].lower() == "deferred":
-                    self.deferred = True
-                else:
-                    self.attribs.append(tmp_attribs[i])
-        rest = line.group(4)
-        split = self.POINTS_TO_RE.split(rest)
+
+        for attribute in ford.utils.paren_split(",", line["attributes"] or ""):
+            attribute = attribute.strip()
+            # Preserve original capitalisation -- TODO: needed?
+            attribute_lower = attribute.lower()
+            if attribute_lower in ["public", "private"]:
+                self.permission = attribute_lower
+            elif attribute_lower == "deferred":
+                self.deferred = True
+            else:
+                self.attribs.append(attribute)
+
+        split = self.POINTS_TO_RE.split(line["names"])
         self.name = split[0].strip()
-        self.generic = line.group(1).lower() == "generic"
-        self.proto = line.group(2)
+        self.generic = line["generic"].lower() == "generic"
+        self.proto = line["prototype"]
         if self.proto:
             self.proto = self.proto[1:-1].strip()
         self.bindings = []
@@ -2215,47 +2169,39 @@ class FortranBoundProcedure(FortranBase):
                 self.bindings.append(bind.strip())
         else:
             self.bindings.append(self.name)
-        if line.group(2):
-            self.prototype = line.group(2)[1:-1]
-        else:
-            self.prototype = None
 
     def correlate(self, project):
         self.all_procs = self.parent.all_procs
         self.protomatch = False
         if self.proto:
-            if self.proto.lower() in self.all_procs:
-                self.proto = self.all_procs[self.proto.lower()]
+            proto_lower = self.proto.lower()
+            if proto_lower in self.all_procs:
+                self.proto = self.all_procs[proto_lower]
                 self.protomatch = True
-            elif self.proto.lower() in self.parent.all_absinterfaces:
-                self.proto = self.parent.all_absinterfaces[self.proto.lower()]
+            elif proto_lower in self.parent.all_absinterfaces:
+                self.proto = self.parent.all_absinterfaces[proto_lower]
                 self.protomatch = True
-            # else:
-            #    self.proto = FortranSpoof(self.proto, self, 'INTERFACE')
-            #    self.protomatch = True
+
         if self.generic:
-            for i in range(len(self.bindings)):
-                for proc in self.parent.boundprocs:
-                    if type(self.bindings[i]) is str:
-                        if proc.name and proc.name.lower() == self.bindings[i].lower():
-                            self.bindings[i] = proc
-                            break
-                    else:
-                        if (
-                            proc.name
-                            and proc.name.lower() == self.bindings[i].name.lower()
-                        ):
-                            self.bindings[i] = proc
-                            break
-                # else:
-                #    self.bindings[i] = FortranSpoof(self.bindings[i], self.parent, 'BOUNDPROC')
+            parent_boundprocs = {
+                proc.name.lower(): proc for proc in self.parent.boundprocs if proc
+            }
+
+            for i, binding in enumerate(self.bindings):
+                binding_name = getattr(binding, "name", binding).lower()
+
+                try:
+                    self.bindings[i] = parent_boundprocs[binding_name]
+                except KeyError:
+                    pass
+
         elif not self.deferred:
             for i in range(len(self.bindings)):
-                if self.bindings[i].lower() in self.all_procs:
+                try:
                     self.bindings[i] = self.all_procs[self.bindings[i].lower()]
+                    self.bindings[i].binding = self
+                except KeyError:
                     break
-            # else:
-            #    self.bindings[i] = FortranSpoof(self.bindings[i], self.parent, 'BOUNDPROC')
 
         self.sort_components()
 
@@ -2356,13 +2302,10 @@ class FortranBlockData(FortranContainer):
         self.sort_components()
 
     def prune(self):
-        self.types = [obj for obj in self.types if obj.permission in self.display]
-        self.variables = [
-            obj for obj in self.variables if obj.permission in self.display
-        ]
+        self.types = self.filter_display(self.types)
+        self.variables = self.filter_display(self.variables)
         for dtype in self.types:
             dtype.visible = True
-        for dtype in self.types:
             dtype.prune()
 
     def _cleanup(self):
@@ -2422,12 +2365,9 @@ class FortranCommon(FortranBase):
                 except ValueError:
                     pass
             else:
-                if self.variables[i][0].lower() in "ijklmn":
-                    vartype = "integer"
-                else:
-                    vartype = "real"
-                self.variables[i] = FortranVariable(self.variables[i], vartype, self)
-                self.variables[i].doc = ""
+                self.variables[i] = FortranVariable(
+                    self.variables[i], implicit_type(self.variables[i]), self, doc=""
+                )
 
         if self.name in project.common:
             self.other_uses = project.common[self.name]
@@ -2618,15 +2558,14 @@ class GenericSource(FortranBase):
         return ""
 
 
-_can_have_contains = [
+_can_have_contains = (
     FortranModule,
     FortranProgram,
-    FortranFunction,
-    FortranSubroutine,
+    FortranProcedure,
     FortranType,
     FortranSubmodule,
     FortranSubmoduleProcedure,
-]
+)
 
 
 def remove_kind_suffix(literal, is_character: bool = False):
@@ -2645,7 +2584,7 @@ def line_to_variables(source, line, inherit_permission, parent):
     Returns a list of variables declared in the provided line of code. The
     line of code should be provided as a string.
     """
-    parsed_type = parse_type(line, parent.strings, parent.settings)
+    parsed_type = parse_type(line, parent.strings, parent.settings["extra_vartypes"])
     attribs = []
     intent = ""
     optional = False
@@ -2735,6 +2674,9 @@ def line_to_variables(source, line, inherit_permission, parent):
     return varlist
 
 
+_EXTRA_TYPES_RE_CACHE: Dict[Tuple[str, ...], re.Pattern] = {}
+
+
 @dataclass
 class ParsedType:
     vartype: str
@@ -2744,18 +2686,24 @@ class ParsedType:
     proto: Union[None, str, List[str]] = None
 
 
-def parse_type(string: str, capture_strings: List[str], settings: dict) -> ParsedType:
+def parse_type(
+    string: str, capture_strings: List[str], extra_vartypes: Sequence[str]
+) -> ParsedType:
     """
     Gets variable type, kind, length, and/or derived-type attributes from a
     variable declaration.
     """
-    typestr = ""
-    for vtype in settings["extra_vartypes"]:
-        typestr = typestr + "|" + vtype
-    var_type_re = re.compile(VAR_TYPE_STRING + typestr, re.IGNORECASE)
-    match = var_type_re.match(string)
-    if not match:
-        raise Exception("Invalid variable declaration: {}".format(string))
+    extra_vartypes = tuple(extra_vartypes)
+    try:
+        var_type_re = _EXTRA_TYPES_RE_CACHE[extra_vartypes]
+    except KeyError:
+        var_type_re = re.compile(
+            "|".join((VAR_TYPE_STRING, *extra_vartypes)), re.IGNORECASE
+        )
+        _EXTRA_TYPES_RE_CACHE[extra_vartypes] = var_type_re
+
+    if not (match := var_type_re.match(string)):
+        raise ValueError("Invalid variable declaration: {}".format(string))
 
     vartype = match.group().lower()
     if DOUBLE_PREC_RE.match(vartype):

@@ -6,7 +6,7 @@
 
 You can specify various options and information for your project in the
 meta-data of your project file. Quoting from the `Markdown
-Meta-Data <https://pythonhosted.org/Markdown/extensions/meta_data.html>`__
+Meta-Data <https://python-markdown.github.io/extensions/meta_data/>`__
 page (and not intending to give an example of the meta-data fields
 supported by FORD):
 
@@ -871,6 +871,15 @@ graph’s depth will be reduced to keep the number of nodes below this
 maximum or, if the even a depth of one would result in more nodes than
 the maximum, it will be restructured to give a clearer visualisation.
 (*default:* 100000000)
+
+.. _option-show_proc_parent:
+
+show_proc_parent
+^^^^^^^^^^^^^^^^
+
+If ``true`` then the parent module of a procedure will be displayed in
+the graphs as follows: parent::procedure. 
+(*default:* ``false``)
 
 Output
 ------

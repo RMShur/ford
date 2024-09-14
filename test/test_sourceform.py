@@ -15,6 +15,11 @@ import markdown
 import pytest
 
 
+class FakeProject:
+    def __init__(self, procedures=None):
+        self.procedures = procedures or []
+
+
 @pytest.fixture
 def parse_fortran_file(copy_fortran_file):
     def parse_file(data, **kwargs):
@@ -423,7 +428,7 @@ def test_module_default_access(parse_fortran_file):
     """
 
     fortran_file = parse_fortran_file(data)
-    fortran_file.modules[0].correlate(None)
+    fortran_file.modules[0].correlate(FakeProject())
 
     assert set(fortran_file.modules[0].all_procs.keys()) == {
         "sub_public",
@@ -491,7 +496,7 @@ def test_module_public_access(parse_fortran_file):
     """
 
     fortran_file = parse_fortran_file(data)
-    fortran_file.modules[0].correlate(None)
+    fortran_file.modules[0].correlate(FakeProject())
 
     assert set(fortran_file.modules[0].all_procs.keys()) == {
         "sub_public",
@@ -559,7 +564,7 @@ def test_module_private_access(parse_fortran_file):
     """
 
     fortran_file = parse_fortran_file(data)
-    fortran_file.modules[0].correlate(None)
+    fortran_file.modules[0].correlate(FakeProject())
 
     assert set(fortran_file.modules[0].all_procs.keys()) == {
         "sub_public",
@@ -738,13 +743,15 @@ def test_submodule_ancestors(parse_fortran_file):
             "procedure(bar) :: thing",
             ParsedType("procedure", ":: thing", proto=["bar", ""]),
         ),
+        ("Vec :: vector", ParsedType("vec", ":: vector")),
+        ("Mat :: matrix", ParsedType("mat", ":: matrix")),
     ],
 )
 def test_parse_type(variable_decl, expected):
     # Tokeniser will have previously replaced strings with index into
     # this list
     capture_strings = ['"a"']
-    result = parse_type(variable_decl, capture_strings, {"extra_vartypes": []})
+    result = parse_type(variable_decl, capture_strings, ["Vec", "Mat"])
     assert result.vartype == expected.vartype
     assert result.kind == expected.kind
     assert result.strlen == expected.strlen
@@ -1239,7 +1246,7 @@ def test_type_component_permissions(parse_fortran_file):
     """
 
     fortran_file = parse_fortran_file(data)
-    fortran_file.modules[0].correlate(None)
+    fortran_file.modules[0].correlate(FakeProject())
 
     for ftype in fortran_file.modules[0].types:
         assert (
@@ -1270,7 +1277,7 @@ def test_variable_formatting(parse_fortran_file):
     """
 
     fortran_file = parse_fortran_file(data)
-    fortran_file.modules[0].correlate(None)
+    fortran_file.modules[0].correlate(FakeProject())
     variable0 = fortran_file.modules[0].variables[0]
     variable1 = fortran_file.modules[0].variables[1]
 
@@ -1393,7 +1400,7 @@ def test_module_procedure_in_module(parse_fortran_file):
 
     fortran_file = parse_fortran_file(data)
     module = fortran_file.modules[0]
-    module.correlate(None)
+    module.correlate(FakeProject())
 
     interface = module.interfaces[0]
     assert interface.name == "quaxx"
@@ -1420,7 +1427,7 @@ def test_module_interface_same_name_as_interface(parse_fortran_file):
 
     fortran_file = parse_fortran_file(data)
     module = fortran_file.modules[0]
-    module.correlate(None)
+    module.correlate(FakeProject())
 
     interface = module.interfaces[0]
     assert interface.name == "foo"
@@ -1451,7 +1458,7 @@ def test_procedure_pointer(parse_fortran_file):
 
     fortran_file = parse_fortran_file(data)
     module = fortran_file.modules[0]
-    module.correlate(None)
+    module.correlate(FakeProject())
     assert len(module.interfaces[0].modprocs) == 0
     assert module.interfaces[0].variables[0].name == "unary_f"
 
@@ -1527,3 +1534,58 @@ def test_function_whitespace(parse_fortran_file):
     function = fortran_file.functions[0]
     arg_names = [arg.name for arg in function.args]
     assert arg_names == ["a", "b", "c", "d"]
+
+
+def test_bind_name_subroutine(parse_fortran_file):
+    data = """\
+    subroutine init() bind(C, name="c_init")
+    end subroutine init
+    """
+
+    fortran_file = parse_fortran_file(data)
+    subroutine = fortran_file.subroutines[0]
+
+    assert subroutine.bindC == 'C, name="c_init"'
+
+
+def test_bind_name_function(parse_fortran_file):
+    data = """\
+    integer function foo() bind(C, name="c_foo")
+    end function foo
+    """
+
+    fortran_file = parse_fortran_file(data)
+    function = fortran_file.functions[0]
+
+    assert function.bindC == 'C, name="c_foo"'
+
+
+def test_generic_bound_procedure(parse_fortran_file):
+    data = """\
+    module subdomain_m
+      type subdomain_t
+      contains
+        procedure no_colon
+        procedure :: colon
+        generic :: operator(+) => no_colon, colon
+      end type
+      interface
+        module function no_colon(lhs, rhs)
+          class(subdomain_t), intent(in) :: lhs
+          integer, intent(in) :: rhs
+          type(subdomain_t) total
+        end function
+        module function colon(lhs, rhs)
+          class(subdomain_t), intent(in) :: lhs, rhs
+          type(subdomain_t) total
+        end function
+      end interface
+    end module
+    """
+
+    fortran_file = parse_fortran_file(data)
+    fortran_type = fortran_file.modules[0].types[0]
+
+    expected_names = sorted(["no_colon", "colon", "operator(+)"])
+    bound_proc_names = sorted([proc.name for proc in fortran_type.boundprocs])
+    assert bound_proc_names == expected_names

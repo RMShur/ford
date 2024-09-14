@@ -55,12 +55,24 @@ def make_project_graphs(tmp_path_factory):
         type(derived) :: part
       end type thing
 
+      type alpha
+      contains
+        procedure :: five
+        procedure :: six
+      end type alpha
+
     contains
       subroutine one
       end subroutine one
       subroutine two
         call one
       end subroutine two
+      subroutine five
+      end subroutine five
+      function six(this) result(res)
+        real :: res
+        res = 1
+      end function six
     end module c
 
     submodule (c) c_submod
@@ -72,6 +84,10 @@ def make_project_graphs(tmp_path_factory):
     program foo
       use c
       call three
+      real :: x
+      type(alpha) :: y
+      call y%five()
+      x = y%six()
     contains
       subroutine three
         use external_mod
@@ -98,7 +114,9 @@ def make_project_graphs(tmp_path_factory):
     settings["graph"] = True
     project = create_project(settings)
 
-    graphs = GraphManager("", "", graphdir="", parentdir="..", coloured_edges=True)
+    graphs = GraphManager(
+        "", "", graphdir="", parentdir="..", coloured_edges=True, show_proc_parent=True
+    )
     for entity_list in [
         project.types,
         project.procedures,
@@ -135,15 +153,15 @@ TYPE_GRAPH_KEY = ["Type"]
         (
             ["usegraph"],
             [
-                "module~a",
-                "module~b",
-                "module~c",
-                "module~c_submod",
-                "module~c_subsubmod",
+                "a",
+                "b",
+                "c",
+                "c_submod",
+                "c_subsubmod",
                 "iso_fortran_env",
                 "external_mod",
-                "proc~three",
-                "program~foo",
+                "foo::three",
+                "foo",
             ],
             [
                 "module~b->module~a",
@@ -160,12 +178,14 @@ TYPE_GRAPH_KEY = ["Type"]
         (
             ["callgraph"],
             [
-                "proc~one",
-                "proc~three",
-                "proc~two",
-                "proc~four",
+                "c::one",
+                "foo::three",
+                "c::two",
+                "foo::four",
                 "other_sub",
-                "program~foo",
+                "foo",
+                "c::alpha%five",
+                "c::alpha%six",
             ],
             [
                 "proc~three->proc~one",
@@ -174,12 +194,14 @@ TYPE_GRAPH_KEY = ["Type"]
                 "proc~three->other_sub",
                 "program~foo->proc~three",
                 "proc~four->proc~four",
+                "program~foo->proc~five",
+                "program~foo->proc~six",
             ],
             PROC_GRAPH_KEY,
         ),
         (
             ["typegraph"],
-            ["type~base", "type~derived", "type~leaf", "external_type", "type~thing"],
+            ["base", "derived", "leaf", "external_type", "thing", "alpha"],
             [
                 "type~leaf->type~derived",
                 "type~derived->type~base",
@@ -190,19 +212,13 @@ TYPE_GRAPH_KEY = ["Type"]
         ),
         (
             ["modules", "b", "usesgraph"],
-            ["module~a", "module~b"],
+            ["a", "b"],
             ["module~b->module~a"],
             MOD_GRAPH_KEY,
         ),
         (
             ["modules", "b", "usedbygraph"],
-            [
-                "module~b",
-                "module~c",
-                "module~c_submod",
-                "module~c_subsubmod",
-                "program~foo",
-            ],
+            ["b", "c", "c_submod", "c_subsubmod", "foo"],
             [
                 "module~c->module~b",
                 "module~c_submod->module~c",
@@ -213,31 +229,31 @@ TYPE_GRAPH_KEY = ["Type"]
         ),
         (
             ["types", "derived", "inhergraph"],
-            ["type~base", "type~derived"],
+            ["base", "derived"],
             ["type~derived->type~base"],
             TYPE_GRAPH_KEY,
         ),
         (
             ["types", "derived", "inherbygraph"],
-            ["type~derived", "type~leaf", "type~thing"],
+            ["derived", "leaf", "thing"],
             ["type~leaf->type~derived", "type~thing->type~derived"],
             TYPE_GRAPH_KEY,
         ),
         (
             ["procedures", "two", "callsgraph"],
-            ["proc~one", "proc~two"],
+            ["c::one", "c::two"],
             ["proc~two->proc~one"],
             PROC_GRAPH_KEY,
         ),
         (
             ["procedures", "two", "calledbygraph"],
-            ["proc~three", "proc~two", "program~foo"],
+            ["foo::three", "c::two", "foo"],
             ["proc~three->proc~two", "program~foo->proc~three"],
             PROC_GRAPH_KEY,
         ),
         (
             ["procedures", "three", "usesgraph"],
-            ["external_mod", "proc~three"],
+            ["external_mod", "foo::three"],
             ["proc~three->external_mod"],
             MOD_GRAPH_KEY,
         ),
@@ -267,7 +283,7 @@ def test_graphs(
 
     soup = BeautifulSoup(str(graph), features="html.parser")
     # Get nodes and edges just in the graph, and not in the legend
-    node_names = [s.title.text for s in soup.svg.find_all("g", class_="node")]
+    node_names = [s.find("text").text for s in soup.svg.find_all("g", class_="node")]
     edge_names = [s.title.text for s in soup.svg.find_all("g", class_="edge")]
 
     assert sorted(node_names) == sorted(expected_nodes)
@@ -280,3 +296,96 @@ def test_graphs(
     legend_nodes = [s.title.text for s in legend.find_all("g", class_="node")]
     assert legend_nodes == expected_legend_nodes + ["This Page's Entity"]
     assert legend.find_all("g", class_="edge") == []
+
+
+def test_graphs_as_table(tmp_path):
+    data = """\
+    program foo
+    contains
+      subroutine one
+      end subroutine one
+
+      subroutine a
+        call one()
+      end subroutine a
+
+      subroutine b
+        call one()
+      end subroutine b
+
+      subroutine c
+        call one()
+      end subroutine c
+
+      subroutine d
+        call one()
+      end subroutine d
+
+      subroutine e
+        call one()
+      end subroutine e
+
+      subroutine f
+        call one()
+      end subroutine f
+
+      subroutine g
+        call one()
+      end subroutine g
+
+      subroutine h
+        call one()
+      end subroutine h
+    end program foo
+    """
+
+    src_dir = tmp_path / "graphs" / "src"
+    src_dir.mkdir(exist_ok=True, parents=True)
+    full_filename = src_dir / "test.f90"
+    with open(full_filename, "w") as f:
+        f.write(dedent(data))
+
+    settings = deepcopy(DEFAULT_SETTINGS)
+    settings["src_dir"] = [src_dir]
+    settings["graph"] = True
+    settings["graph_maxnodes"] = 4
+    project = create_project(settings)
+
+    graphs = GraphManager(
+        "", "", graphdir="", parentdir="..", coloured_edges=True, show_proc_parent=True
+    )
+    for entity_list in [
+        project.procedures,
+        project.programs,
+    ]:
+        for item in entity_list:
+            graphs.register(item)
+
+    graphs.graph_all()
+    graphs.output_graphs(0)
+
+    for graph in graphs.procedures:
+        if graph.name == "one":
+            break
+    graph = graph.calledbygraph
+
+    soup = BeautifulSoup(str(graph), features="html.parser")
+    node_names = sorted([n.text for n in soup.table.find_all(class_="node")])
+    num_arrows = len(soup.table.find_all(class_="triangle-right"))
+    # These are the spacing 'w's
+    num_ws = len(soup.table.find_all(class_="solidBottom"))
+
+    expected_node_names = [
+        "foo::a",
+        "foo::b",
+        "foo::c",
+        "foo::d",
+        "foo::e",
+        "foo::f",
+        "foo::g",
+        "foo::h",
+    ]
+
+    assert node_names == expected_node_names
+    assert num_arrows == len(expected_node_names)
+    assert num_ws == len(expected_node_names)
